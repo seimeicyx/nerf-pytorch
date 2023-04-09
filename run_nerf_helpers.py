@@ -46,6 +46,7 @@ class Embedder:
 
 
 def get_embedder(multires, i=0):
+    #输出编码的f(x),和总共的维度
     if i == -1:
         return nn.Identity(), 3
     
@@ -194,19 +195,29 @@ def ndc_rays(H, W, focal, near, rays_o, rays_d):
 
 # Hierarchical sampling (section 5.2)
 def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
+    #sample_pdf用于从一组权重和对应的离散化直方图中生成一定数量的样本点的函数，直方图指的是：将每条射线从近到远分成若干个深度区间，
+    # 每个区间的密度值进行归一化，我猜这里的区间与密度值应该是分层采样得到的，粗糙网络的权重已经被训练好了。
+    
+    #bins边界
+    #weights 每个区间对应权重
+    #N_samples 需要生成的样本数量
+    #det 是否以确定性的方式生成样本
+    #pytest 是否在运行测试时使用该函数
+    
     # Get pdf
     weights = weights + 1e-5 # prevent nans
-    pdf = weights / torch.sum(weights, -1, keepdim=True)
-    cdf = torch.cumsum(pdf, -1)
+    pdf = weights / torch.sum(weights, -1, keepdim=True)#归一化
+    cdf = torch.cumsum(pdf, -1)#累计密度函数
     cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
 
     # Take uniform samples
-    if det:
+    if det:#确定性抽样
         u = torch.linspace(0., 1., steps=N_samples)
         u = u.expand(list(cdf.shape[:-1]) + [N_samples])
-    else:
+    else:#分层抽样
         u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
 
+    #u的shape:()
     # Pytest, overwrite u with numpy's fixed random numbers
     if pytest:
         np.random.seed(0)
@@ -219,19 +230,27 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
         u = torch.Tensor(u)
 
     # Invert CDF
-    u = u.contiguous()
-    inds = torch.searchsorted(cdf, u, right=True)
+    u = u.contiguous()#重新拷贝当前变量，断开依赖,首先，u 被转化为连续的张量，这一步可以确保之后的计算中能够正确使用 PyTorch 的 API 
+    inds = torch.searchsorted(cdf, u, right=True)#查找到cdf值大于或等于u的下标,使用 PyTorch 中的 torch.searchsorted 函数找到 u 对应的直方图柱子位置的下标 inds。
+    #接下来，根据下标 inds，找到比 u 小的最大柱子位置和比 u 大的最小柱子位置，并将两者合并成一个形状为 (batch, N_samples, 2) 的张量 inds_g。
     below = torch.max(torch.zeros_like(inds-1), inds-1)
     above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
     inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
 
     # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
     # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
+    
+    #然后，使用 torch.gather 函数将直方图柱子位置和权重按照 inds_g 中的下标进行匹配，得到形状为 (batch, N_samples, 2) 的 bins_g 和 cdf_g。
+    #ds_g 指定的位置处的取值，而 bins_g 表示对应位置的直方图柱子的位置。
     matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
     cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
     bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
-
+    
+    #最后，根据 cdf_g 和 bins_g，计算出采样点的位置 samples，并返回结果。
     denom = (cdf_g[...,1]-cdf_g[...,0])
+    #在计算 denom 时，需要进行特判，避免分母为 0 的情况。,
+    # 这里使用 torch.where 函数来判断分母是否小于一个阈值（这里的阈值为 1e-5），
+    # 如果小于阈值，则将分母的值替换为 1。这一步操作是为了避免分母为 0 的情况，从而导致采样出现错误。
     denom = torch.where(denom<1e-5, torch.ones_like(denom), denom)
     t = (u-cdf_g[...,0])/denom
     samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])

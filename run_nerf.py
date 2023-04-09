@@ -35,17 +35,20 @@ def batchify(fn, chunk):
 
 
 def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+    #用于将输入和视角方向传递给一个神经网络，然后返回输出。
     """Prepares inputs and applies network 'fn'.
     """
+    #首先将输入张量展平为二维张量
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded = embed_fn(inputs_flat)
+    embedded = embed_fn(inputs_flat)#将其通过嵌入函数 embed_fn 进行embody
 
+    #如果视角方向 viewdirs 不是 None，则将其也嵌入到输入张量中，嵌入函数为 embeddirs_fn
     if viewdirs is not None:
         input_dirs = viewdirs[:,None].expand(inputs.shape)
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
-
+    #由于 fn 可能无法同时处理整个批次，因此使用 batchify 函数将其转换为一个可以分批次运行的函数。最后将输出张量重构成与输入张量形状相同的张量，并返回。
     outputs_flat = batchify(fn, netchunk)(embedded)
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
@@ -186,11 +189,13 @@ def create_nerf(args):
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
+    #corse model
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
                  input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
     grad_vars = list(model.parameters())
-
+    
+    #fine models
     model_fine = None
     if args.N_importance > 0:
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
@@ -235,18 +240,22 @@ def create_nerf(args):
     ##########################
 
     render_kwargs_train = {
-        'network_query_fn' : network_query_fn,
-        'perturb' : args.perturb,
-        'N_importance' : args.N_importance,
-        'network_fine' : model_fine,
-        'N_samples' : args.N_samples,
-        'network_fn' : model,
-        'use_viewdirs' : args.use_viewdirs,
-        'white_bkgd' : args.white_bkgd,
-        'raw_noise_std' : args.raw_noise_std,
+        'network_query_fn' : network_query_fn,#模型的查询函数，用于查询深度网络中的特定层。
+        'perturb' : args.perturb,#是否对相机位置进行微小的扰动。
+        'N_importance' : args.N_importance,#计算渲染方程时，从每个像素投射多少条路径，用于估计颜色值和权重。
+        'network_fine' : model_fine,#NeRF-fine模型。
+        'N_samples' : args.N_samples,#每条路径上采样的点数。
+        'network_fn' : model, #NeRF-coarse模型。
+        'use_viewdirs' : args.use_viewdirs,#是否使用相机的视线方向。
+        'white_bkgd' : args.white_bkgd, #是否使用白色背景。
+        'raw_noise_std' : args.raw_noise_std, #相机位置和方向的噪声标准差。
     }
 
     # NDC only good for LLFF-style forward facing data
+    #这段代码是根据数据集类型以及命令行参数来设置render_kwargs_train字典中的ndc和lindisp参数。
+    # 其中，ndc是一个bool类型的参数，表示是否应该将输入的相机坐标归一化到NDC（Normalized Device Coordinate）坐标系，
+    # 这个操作只对类似LLFF数据集中前向视角的数据有效；lindisp是一个bool类型的参数，表示是否在重要性采样时使用线性深度而不是深度值的对数。
+    # 如果数据集类型不是LLFF或者命令行中设置了no_ndc，则ndc设置为False，否则根据数据集类型设置；lindisp默认为False，可以通过命令行参数来设置。
     if args.dataset_type != 'llff' or args.no_ndc:
         print('Not ndc!')
         render_kwargs_train['ndc'] = False
@@ -255,7 +264,8 @@ def create_nerf(args):
     render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
-
+    #render_kwargs_train 和 render_kwargs_test 是传递给渲染函数的参数字典，其中包括了训练和测试过程中使用的一些参数
+    #start 是训练过程中的起始步数，grad_vars 是需要进行梯度更新的变量，optimizer 是用于优化梯度的优化器对象。
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
@@ -874,5 +884,4 @@ def train():
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
-
     train()
