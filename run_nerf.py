@@ -35,21 +35,24 @@ def batchify(fn, chunk):
 
 
 def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
-    #用于将输入和视角方向传递给一个神经网络，然后返回输出。
+    #用于将输入和视角方向传递给一个神经网络进行前向计算，然后返回输出。
     """Prepares inputs and applies network 'fn'.
     """
     #首先将输入张量展平为二维张量
-    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded = embed_fn(inputs_flat)#将其通过嵌入函数 embed_fn 进行embody
+    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])# torch.Size([65536, 3])，从1024,64展开成1024*64=65536
+    embedded = embed_fn(inputs_flat)#将其通过嵌入函数 embed_fn 进行embody torch.Size([65536, 63]),从3维升到了63维
 
     #如果视角方向 viewdirs 不是 None，则将其也嵌入到输入张量中，嵌入函数为 embeddirs_fn
     if viewdirs is not None:
-        input_dirs = viewdirs[:,None].expand(inputs.shape)
-        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
-        embedded_dirs = embeddirs_fn(input_dirs_flat)
-        embedded = torch.cat([embedded, embedded_dirs], -1)
+        input_dirs = viewdirs[:,None].expand(inputs.shape)# torch.Size([1024, 64, 3])
+        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])# torch.Size([65536, 3])
+        embedded_dirs = embeddirs_fn(input_dirs_flat)# torch.Size([65536, 27]),从3维升到了27维
+        embedded = torch.cat([embedded, embedded_dirs], -1)# 将两个张量拼接在一起，torch.Size([65536, 90])
+        
     #由于 fn 可能无法同时处理整个批次，因此使用 batchify 函数将其转换为一个可以分批次运行的函数。最后将输出张量重构成与输入张量形状相同的张量，并返回。
-    outputs_flat = batchify(fn, netchunk)(embedded)
+     # 以更小的patch-netchunk送进网络跑前向
+    outputs_flat = batchify(fn, netchunk)(embedded)# （65536,4）
+    # reshape为（1024,64,4），4包括RGB和alpha；
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
 
@@ -111,16 +114,16 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = torch.reshape(viewdirs, [-1,3]).float()
 
-    sh = rays_d.shape # [..., 3]
-    if ndc:
+    sh = rays_d.shape # [...,1024, 3]
+    if ndc:#将射线进行规范化设备坐标系（ndc）变换「可学」
         # for forward facing scenes
         rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d)
 
     # Create ray batch
-    rays_o = torch.reshape(rays_o, [-1,3]).float()
+    rays_o = torch.reshape(rays_o, [-1,3]).float()# torch.Size([1024, 3])，也就是先把多个批次整合成一个批次(batch_size*num_rays,3)
     rays_d = torch.reshape(rays_d, [-1,3]).float()
 
-    near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])
+    near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])#将维度转化为[batch_size,1]，near和far可能是1也可能是
     rays = torch.cat([rays_o, rays_d, near, far], -1)
     if use_viewdirs:
         rays = torch.cat([rays, viewdirs], -1)
@@ -128,7 +131,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     # Render and reshape
     all_ret = batchify_rays(rays, chunk, **kwargs)
     for k in all_ret:
-        k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
+        k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])#[1024,]
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
     k_extract = ['rgb_map', 'disp_map', 'acc_map']
@@ -261,7 +264,7 @@ def create_nerf(args):
         render_kwargs_train['ndc'] = False
         render_kwargs_train['lindisp'] = args.lindisp
 
-    render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
+    render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}                          
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
     #render_kwargs_train 和 render_kwargs_test 是传递给渲染函数的参数字典，其中包括了训练和测试过程中使用的一些参数
@@ -282,14 +285,15 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         weights: [num_rays, num_samples]. Weights assigned to each sampled color.
         depth_map: [num_rays]. Estimated distance to object.
     """
+    # 论文公式3中alpha公式定义alpha=（1-exp（-sigma*delta））
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
-    dists = z_vals[...,1:] - z_vals[...,:-1]
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
+    dists = z_vals[...,1:] - z_vals[...,:-1]#N_samples个采样点，所以是N_samples-1个距离，shape为[N_rays, N_samples-1]
+    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # 没列最后填充一个超大的数字，填充成[N_rays, N_samples]
 
-    dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
+    dists = dists * torch.norm(rays_d[...,None,:], dim=-1)#目的是将距离从参数空间映射到真实的物理空间？实际上dists并没有发生改变，因为rays_d是归一化的
 
-    rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
+    rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3],将网络原始输出的rgb值映射到0-1。:3是因为rgba，不要a
     noise = 0.
     if raw_noise_std > 0.:
         noise = torch.randn(raw[...,3].shape) * raw_noise_std
@@ -300,11 +304,20 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
-    alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
+    alpha = raw2alpha(raw[...,3] + noise, dists)  # 得到alpha值[N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+    '''
+    raw2alpha表示alpha的计算；
+    weights权重的计算则是w=T*alpha，其中T=exp（-sum（sigma*delta））？
+    RGB_map则是由w*rgb累加得到，以上三个公式为公式3的全部内容；
+    深度图depth_map=sum（w*z）
+    视差图disp_map为深度图取逆；
+    '''
+    #1.对于每个射线的wi，t越大，wi会越接近于0,因此添加一个1e-10避免后面出现除以0的情况。
+    #2.最后一个值多半非常的小，因为在这之前光线可能都被吸收完了，因此它对整个渲染的贡献非常之小，可以直接剔除
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]#[N_rays, N_samples]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
-
+    #这几个式子在论文中没出现，但源码中出现了
     depth_map = torch.sum(weights * z_vals, -1)
     disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
     acc_map = torch.sum(weights, -1)
@@ -358,20 +371,21 @@ def render_rays(ray_batch,
       z_std: [num_rays]. Standard deviation of distances along ray for each
         sample.
     """
+     # 将数据提取出来
     N_rays = ray_batch.shape[0]
     rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
     viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 8 else None
     bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2])
     near, far = bounds[...,0], bounds[...,1] # [-1,1]
-
-    t_vals = torch.linspace(0., 1., steps=N_samples)
+    
+    t_vals = torch.linspace(0., 1., steps=N_samples)#shape(N_samples)
     if not lindisp:
         z_vals = near * (1.-t_vals) + far * (t_vals)
     else:
         z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
 
-    z_vals = z_vals.expand([N_rays, N_samples])
-
+    z_vals = z_vals.expand([N_rays, N_samples])#采样深度值shape(N_rays, N_samples)，每个rays上都是相同采样的，只是值被复制了rays次
+    # 分层采样
     if perturb > 0.:
         # get intervals between samples
         mids = .5 * (z_vals[...,1:] + z_vals[...,:-1])
@@ -509,7 +523,7 @@ def config_parser():
                         help='options : armchair / cube / greek / vase')
 
     ## blender flags
-    parser.add_argument("--white_bkgd", action='store_true', 
+    parser.add_argument("--white_bkgd", action='store_true', default=False,
                         help='set to render synthetic data on a white bkgd (always use for dvoxels)')
     parser.add_argument("--half_res", action='store_true', 
                         help='load blender synthetic data at 400x400 instead of 800x800')
@@ -542,6 +556,9 @@ def config_parser():
 
 
 def train():
+    import os
+    import sys
+    sys.path.append("/home/cad_83/E/chenyingxi/nerf-pytorch")
 
     parser = config_parser()
     args = parser.parse_args()
@@ -736,7 +753,7 @@ def train():
                 i_batch = 0
 
         else:
-            # Random from one image
+            # Random from one image随机选取一个视图
             img_i = np.random.choice(i_train)
             target = images[img_i]
             target = torch.Tensor(target).to(device)
