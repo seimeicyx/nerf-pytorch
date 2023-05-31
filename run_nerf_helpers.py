@@ -110,103 +110,146 @@ def get_embedder(multires, i=0):
 
 #Model
 class NeRF(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
-        """ 
-        """
-        super(NeRF, self).__init__()
-        self.D = D
-        self.W = W
-        self.input_ch = input_ch
-        self.input_ch_views = input_ch_views
-        self.skips = skips
-        self.use_viewdirs = use_viewdirs
+    def __init__(self,W=256,D=8,input_ch=3,input_ch_views=3,output_ch=4,skips=[4],use_viewdirs=False) -> None:
+        super(NeRF,self).__init__()
+        self.W=W
+        self.D=D
+        self.input_ch=input_ch
+        self.input_ch_views=input_ch_views
+        self.output_ch=output_ch
+        self.skips=skips
+        self.use_viewdirs=use_viewdirs
+        self.pts_linears=nn.ModuleList([nn.Linear(input_ch,W)]+[nn.Linear(W,W) if i not in skips else nn.Linear(W+input_ch,W) for i in range(D-1)])
+        self.feature_linear=nn.Linear(W,W)
+        self.alpha_linear=nn.Linear(W,1)
+        self.view_linear=nn.Linear(input_ch_views+W,W//2)
+        self.rgb_linear=nn.Linear(W//2,3)
+        self.output_linear=nn.Linear(W,output_ch)
         
-        self.pts_linears = nn.ModuleList(
-            [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
-        
-        ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
-        self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + W, W//2)])
-
-        ### Implementation according to the paper
-        # self.views_linears = nn.ModuleList(
-        #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
-        
-        if use_viewdirs:
-            self.feature_linear = nn.Linear(W, W)
-            self.alpha_linear = nn.Linear(W, 1)
-            self.rgb_linear = nn.Linear(W//2, 3)
-        else:
-            self.output_linear = nn.Linear(W, output_ch)
-
-    def forward(self, x):
-        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
-        h = input_pts
-        for i, l in enumerate(self.pts_linears):
-            h = self.pts_linears[i](h)
-            h = F.relu(h)
+    def forward(self,x):
+        pts_input,views_input=torch.split(x,[self.input_ch,self.input_ch_views],-1)
+        h=pts_input
+        for i,layer in enumerate(self.pts_linears):
+            h=layer(h)
+            h=F.relu(h)
             if i in self.skips:
-                h = torch.cat([input_pts, h], -1)
-
+                h=torch.cat([pts_input,h],-1)
         if self.use_viewdirs:
-            alpha = self.alpha_linear(h)
-            feature = self.feature_linear(h)
-            h = torch.cat([feature, input_views], -1)
-        
-            for i, l in enumerate(self.views_linears):
-                h = self.views_linears[i](h)
-                h = F.relu(h)
-
-            rgb = self.rgb_linear(h)
-            outputs = torch.cat([rgb, alpha], -1)
+            h=self.feature_linear(h)
+            h=F.relu(h)
+            alpha=self.alpha_linear(h)
+            h=torch.cat([views_input,h],-1)
+            h=self.view_linear(h)
+            h=F.relu(h)
+            rgb=self.rgb_linear(h)
+            outputs=torch.cat([rgb,alpha],-1)
         else:
-            outputs = self.output_linear(h)
-
-        return outputs    
-
-    def load_weights_from_keras(self, weights):
-        assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
+            outputs=self.output_linear(h)
+        return outputs
+# class NeRF(nn.Module):
+#     def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
+#         """ 
+#         """
+#         super(NeRF, self).__init__()
+#         self.D = D
+#         self.W = W
+#         self.input_ch = input_ch
+#         self.input_ch_views = input_ch_views
+#         self.skips = skips
+#         self.use_viewdirs = use_viewdirs
         
-        # Load pts_linears
-        for i in range(self.D):
-            idx_pts_linears = 2 * i
-            self.pts_linears[i].weight.data = torch.from_numpy(np.transpose(weights[idx_pts_linears]))    
-            self.pts_linears[i].bias.data = torch.from_numpy(np.transpose(weights[idx_pts_linears+1]))
+#         self.pts_linears = nn.ModuleList(
+#             [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
         
-        # Load feature_linear
-        idx_feature_linear = 2 * self.D
-        self.feature_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_feature_linear]))
-        self.feature_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_feature_linear+1]))
+#         ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
+#         self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + W, W//2)])
+        
+#         ### Implementation according to the paper
+#         # self.views_linears = nn.ModuleList(
+#         #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
+        
+#         if use_viewdirs:
+#             self.feature_linear = nn.Linear(W, W)
+#             self.alpha_linear = nn.Linear(W, 1)
+#             self.rgb_linear = nn.Linear(W//2, 3)
+#         else:
+#             self.output_linear = nn.Linear(W, output_ch)
 
-        # Load views_linears
-        idx_views_linears = 2 * self.D + 2
-        self.views_linears[0].weight.data = torch.from_numpy(np.transpose(weights[idx_views_linears]))
-        self.views_linears[0].bias.data = torch.from_numpy(np.transpose(weights[idx_views_linears+1]))
+#     def forward(self, x):
+#         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
+#         h = input_pts
+#         for i, l in enumerate(self.pts_linears):
+#             h = self.pts_linears[i](h)
+#             h = F.relu(h)
+#             if i in self.skips:
+#                 h = torch.cat([input_pts, h], -1)
 
-        # Load rgb_linear
-        idx_rbg_linear = 2 * self.D + 4
-        self.rgb_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear]))
-        self.rgb_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear+1]))
+#         if self.use_viewdirs:
+#             alpha = self.alpha_linear(h)
+#             feature = self.feature_linear(h)
+#             h = torch.cat([feature, input_views], -1)
+        
+#             for i, l in enumerate(self.views_linears):
+#                 h = self.views_linears[i](h)
+#                 h = F.relu(h)
 
-        # Load alpha_linear
-        idx_alpha_linear = 2 * self.D + 6
-        self.alpha_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear]))
-        self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear+1]))
+#             rgb = self.rgb_linear(h)
+#             outputs = torch.cat([rgb, alpha], -1)
+#         else:
+#             outputs = self.output_linear(h)
+
+#         return outputs    
+
+    # def load_weights_from_keras(self, weights):
+    #     assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
+        
+    #     # Load pts_linears
+    #     for i in range(self.D):
+    #         idx_pts_linears = 2 * i
+    #         self.pts_linears[i].weight.data = torch.from_numpy(np.transpose(weights[idx_pts_linears]))    
+    #         self.pts_linears[i].bias.data = torch.from_numpy(np.transpose(weights[idx_pts_linears+1]))
+        
+    #     # Load feature_linear
+    #     idx_feature_linear = 2 * self.D
+    #     self.feature_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_feature_linear]))
+    #     self.feature_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_feature_linear+1]))
+
+    #     # Load views_linears
+    #     idx_views_linears = 2 * self.D + 2
+    #     self.views_linears[0].weight.data = torch.from_numpy(np.transpose(weights[idx_views_linears]))
+    #     self.views_linears[0].bias.data = torch.from_numpy(np.transpose(weights[idx_views_linears+1]))
+
+    #     # Load rgb_linear
+    #     idx_rbg_linear = 2 * self.D + 4
+    #     self.rgb_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear]))
+    #     self.rgb_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear+1]))
+
+    #     # Load alpha_linear
+    #     idx_alpha_linear = 2 * self.D + 6
+    #     self.alpha_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear]))
+    #     self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear+1]))
 
 
 
 # Ray helpers
 def get_rays(H, W, K, c2w):
+    #meshgrid(A,B),生成A*B的网格
+    #torch.linspace(0, W-1, W) 从[0,W-1]中均匀采样W个
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
-    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
+    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)#（400,400,3）
+    _dirs1=dirs[..., np.newaxis, :]
+    _dirs2=_dirs1* c2w[:3,:3]
     # Rotate ray directions from camera frame to the world frame
-    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = torch.sum(_dirs2, -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]#（400,400,3）
+    _c2w=c2w[:3,-1]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
-    rays_o = c2w[:3,-1].expand(rays_d.shape)
+    rays_o = _c2w.expand(rays_d.shape)#（400,400,3）c2w[:3,-1](3,1)
+
     return rays_o, rays_d
 
-
+#https://blog.csdn.net/guyuealian/article/details/104184551
 def get_rays_np(H, W, K, c2w):
     #H：长 W：宽 K：相机参数，c2w：相机坐标系转化为世界坐标系的矩阵
     
@@ -259,9 +302,9 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     
     # Get pdf
     weights = weights + 1e-5 # prevent nans[N_rays, N_samples]
-    pdf = weights / torch.sum(weights, -1, keepdim=True)#归一化得到概率密度函数[N_rays, N_samples]
+    pdf = weights / torch.sum(weights, -1, keepdim=True)#归一化得到概率密度函数[N_rays, N_samples-2]
     cdf = torch.cumsum(pdf, -1)#累计密度函数[N_rays, N_samples]
-    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # 在前面添加一列0,[N_rays, N_samples+1]
+    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # 在前面添加一列0,[N_rays, N_samples-1]
 
     # Take uniform samples
     if det:#确定性抽样
@@ -295,7 +338,7 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     
     #然后，使用 torch.gather 函数将直方图柱子位置和权重按照 inds_g 中的下标进行匹配，得到形状为 (batch, N_samples, 2) 的 bins_g 和 cdf_g。
     #ds_g 指定的位置处的取值，而 bins_g 表示对应位置的直方图柱子的位置。
-    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]# =(N_rays, N_samples, N_samples)
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]# =(N_rays, N_samples（u）, N_samples（一条射线）)
     #cdf.unsqueeze(1)的shape:[N_rays, 1,N_samples]
     #cdf.unsqueeze(1).expand(matched_shape)的shape:[N_rays, N_samples,N_samples]
     #inds_g的shape:[N_rays, N_samples,2]

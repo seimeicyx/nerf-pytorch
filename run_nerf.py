@@ -24,18 +24,19 @@ np.random.seed(0)
 DEBUG = False
 
 
-def batchify(fn, chunk):
+def batchify(fn, chunk):#返回一个函数，这个函数会输出fn(input)，但具体实现是每次处理chunk个数据
     """Constructs a version of 'fn' that applies to smaller batches.
     """
     if chunk is None:
         return fn
     def ret(inputs):
+        # print([i for i in range(0, inputs.shape[0], chunk)])
         return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
-    #用于将输入和视角方向传递给一个神经网络进行前向计算，然后返回输出。
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):#输出fn(embed(inputs)+embed(viewdirs))
+    #inputs(1024,64,3)
     """Prepares inputs and applies network 'fn'.
     """
     #首先将输入张量展平为二维张量
@@ -47,7 +48,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         input_dirs = viewdirs[:,None].expand(inputs.shape)# torch.Size([1024, 64, 3])
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])# torch.Size([65536, 3])
         embedded_dirs = embeddirs_fn(input_dirs_flat)# torch.Size([65536, 27]),从3维升到了27维
-        embedded = torch.cat([embedded, embedded_dirs], -1)# 将两个张量拼接在一起，torch.Size([65536, 90])
+        embedded = torch.cat([embedded, embedded_dirs], -1)# 将两个张量拼接在一起，torch.Size([65536, 90]) 后面的90是embedded points与dir catch在一起
         
     #由于 fn 可能无法同时处理整个批次，因此使用 batchify 函数将其转换为一个可以分批次运行的函数。最后将输出张量重构成与输入张量形状相同的张量，并返回。
      # 以更小的patch-netchunk送进网络跑前向
@@ -141,7 +142,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
 
 
 def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
-
+    render_poses=render_poses[0:1]
     H, W, focal = hwf
 
     if render_factor!=0:
@@ -184,11 +185,16 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
+    # from models.encoder import FreEncoder
+    # embed_fn=FreEncoder(L=args.multires)
+    # input_ch=embed_fn.out_dim
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
+        # embeddirs_fn=FreEncoder(L=args.multires_views)
+        # input_ch_views=embeddirs_fn.out_dim
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
@@ -220,25 +226,25 @@ def create_nerf(args):
 
     ##########################
 
-    # Load checkpoints
-    if args.ft_path is not None and args.ft_path!='None':
-        ckpts = [args.ft_path]
-    else:
-        ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
+    # # Load checkpoints
+    # if args.ft_path is not None and args.ft_path!='None':
+    #     ckpts = [args.ft_path]
+    # else:
+    #     ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
 
-    print('Found ckpts', ckpts)
-    if len(ckpts) > 0 and not args.no_reload:
-        ckpt_path = ckpts[-1]
-        print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
+    # print('Found ckpts', ckpts)
+    # if len(ckpts) > 0 and not args.no_reload:
+    #     ckpt_path = ckpts[-1]
+    #     print('Reloading from', ckpt_path)
+    #     ckpt = torch.load(ckpt_path)
 
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    #     start = ckpt['global_step']
+    #     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
-        # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
-        if model_fine is not None:
-            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+    #     # Load model
+    #     model.load_state_dict(ckpt['network_fn_state_dict'])
+    #     if model_fine is not None:
+    #         model_fine.load_state_dict(ckpt['network_fine_state_dict'])
 
     ##########################
 
@@ -313,8 +319,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     深度图depth_map=sum（w*z）
     视差图disp_map为深度图取逆；
     '''
-    #1.对于每个射线的wi，t越大，wi会越接近于0,因此添加一个1e-10避免后面出现除以0的情况。
-    #2.最后一个值多半非常的小，因为在这之前光线可能都被吸收完了，因此它对整个渲染的贡献非常之小，可以直接剔除
+    #对于每个射线的wi，t越大，wi会越接近于0,因此添加一个1e-10避免后面出现除以0的情况。
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]#[N_rays, N_samples]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
     #这几个式子在论文中没出现，但源码中出现了
@@ -392,7 +397,7 @@ def render_rays(ray_batch,
         upper = torch.cat([mids, z_vals[...,-1:]], -1)
         lower = torch.cat([z_vals[...,:1], mids], -1)
         # stratified samples in those intervals
-        t_rand = torch.rand(z_vals.shape)
+        t_rand = torch.rand(z_vals.shape)#为N_rays条光线，N_samples个采样点每个都采样一个随机数
 
         # Pytest, overwrite u with numpy's fixed random numbers
         if pytest:
@@ -547,7 +552,7 @@ def config_parser():
                         help='frequency of tensorboard image logging')
     parser.add_argument("--i_weights", type=int, default=10000, 
                         help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=50000, 
+    parser.add_argument("--i_testset", type=int, default=500, 
                         help='frequency of testset saving')
     parser.add_argument("--i_video",   type=int, default=50000, 
                         help='frequency of render_poses video saving')
@@ -556,9 +561,9 @@ def config_parser():
 
 
 def train():
-    import os
-    import sys
-    sys.path.append("/home/cad_83/E/chenyingxi/nerf-pytorch")
+    # import os
+    # import sys
+    # sys.path.append("/home/cad_83/E/chenyingxi/nerf-pytorch")
 
     parser = config_parser()
     args = parser.parse_args()
@@ -666,7 +671,7 @@ def train():
     # Create nerf model
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
     global_step = start
-
+    
     bds_dict = {
         'near' : near,
         'far' : far,
@@ -834,7 +839,7 @@ def train():
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
-
+            print("save to {}".format(moviebase))
             # if args.use_viewdirs:
             #     render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
             #     with torch.no_grad():
@@ -900,5 +905,6 @@ def train():
 
 
 if __name__=='__main__':
+    torch.cuda.set_device(1)
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
     train()
