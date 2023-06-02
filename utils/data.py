@@ -6,15 +6,20 @@ import numpy as np
 from typing import Tuple,List
 from dataclasses import dataclass
 from utils.camera import SceneMeta
+import torch
 @dataclass
-class Target_img():
+class Target_img_np():
     imgs:np.array
     camera_poses:np.array
+@dataclass
+class Target_img_tensor():
+    imgs:torch.tensor
+    camera_poses:torch.tensor
 def load_imgf32(img_path:str)->np.array:
     img=Image.open(img_path)
     img=np.array(img,dtype=np.float32)
     return img/255.0
-def load_jsondata(json_path:Path)->Tuple[Target_img,SceneMeta]:
+def load_jsondata(json_path:Path)->Tuple[Target_img_np,SceneMeta]:
     imgs=[]
     camera_poses=[]
     angle_x=0.5
@@ -39,6 +44,6 @@ def load_jsondata(json_path:Path)->Tuple[Target_img,SceneMeta]:
     except BaseException as e:
         logger.error(e)
     finally:
-        train_targetImg=Target_img(imgs=imgs,camera_poses=camera_poses)
+        train_targetImg=Target_img_np(imgs=imgs,camera_poses=camera_poses)
         scene_train=SceneMeta(H=H,W=W,K=K)
         return train_targetImg,scene_train

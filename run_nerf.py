@@ -548,8 +548,33 @@ def config_parser():
                         help='frequency of render_poses video saving')
 
     return parser
-
-
+from utils.camera import SceneMeta,PinholeCamera
+from utils.data import Target_img_tensor
+def sample_traindata(args,train_targetImg_ten: Target_img_tensor,scene_train: SceneMeta,iter:int):
+    imgs=train_targetImg_ten.imgs
+    poses=train_targetImg_ten.camera_poses
+    img_i=np.random.randint(0, imgs.shape[0])
+    
+    target_img=imgs[img_i]
+    pose=poses[img_i]
+    
+    H,W,K=scene_train.get_scene()
+    cam=PinholeCamera(scene_meta=SceneMeta(H,W,K),camera_pose=pose)
+    rays_o, rays_d = cam.cast_ray()
+    if iter<args.precrop_iters:
+        dH=int((H*args.precrop_frac)//2)
+        dW=int((W*args.precrop_frac)//2)
+        coords=torch.stack(torch.meshgrid(torch.arange(H//2-dH,H//2+dH+1),torch.arange(W//2-dW,W//2+dW+1)),dim=-1)
+    else:
+        coords=torch.stack(torch.meshgrid(torch.arange(H),torch.arange(W)),dim=-1)
+    coords=torch.reshape(coords,[-1,2])
+    select_inds=np.random.choice(coords.shape[0],size=args.N_rand,replace=False)
+    select_coords=coords[select_inds].long()
+    rays_o=rays_o[select_coords[:,0],select_coords[:,1]]
+    rays_d=rays_d[select_coords[:,0],select_coords[:,1]]
+    batch_rays=torch.stack([rays_o,rays_d],0)
+    target_s=target_img[select_coords[:,0],select_coords[:,1]]
+    return batch_rays,target_s
 def train():
 
 
@@ -750,39 +775,43 @@ def train():
                 i_batch = 0
 
         else:
-            # Random from one image
-            img_i = np.random.choice(i_train)
-            target = images[img_i]
-            target = torch.Tensor(target).to(device)
-            pose = poses[img_i, :3,:4]
+            # # Random from one image
+            # img_i = np.random.choice(i_train)
+            # target = images[img_i]
+            # target = torch.Tensor(target).to(device)
+            # pose = poses[img_i, :3,:4]
 
-            if N_rand is not None:
-                from utils.camera import SceneMeta,PinholeCamera
-                cam=PinholeCamera(scene_meta=SceneMeta(H,W,K),camera_pose=pose)
-                rays_o, rays_d = cam.cast_ray()
-                # rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
+            # if N_rand is not None:
+            #     from utils.camera import SceneMeta,PinholeCamera
+            #     cam=PinholeCamera(scene_meta=SceneMeta(H,W,K),camera_pose=pose)
+            #     rays_o, rays_d = cam.cast_ray()
+            #     # rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
 
-                if i < args.precrop_iters:
-                    dH = int(H//2 * args.precrop_frac)
-                    dW = int(W//2 * args.precrop_frac)
-                    coords = torch.stack(
-                        torch.meshgrid(
-                            torch.linspace(H//2 - dH, H//2 + dH - 1, 2*dH), 
-                            torch.linspace(W//2 - dW, W//2 + dW - 1, 2*dW)
-                        ), -1)
-                    if i == start:
-                        print(f"[Config] Center cropping of size {2*dH} x {2*dW} is enabled until iter {args.precrop_iters}")                
-                else:
-                    coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+            #     if i < args.precrop_iters:
+            #         dH = int(H//2 * args.precrop_frac)
+            #         dW = int(W//2 * args.precrop_frac)
+            #         coords = torch.stack(
+            #             torch.meshgrid(
+            #                 torch.linspace(H//2 - dH, H//2 + dH - 1, 2*dH), 
+            #                 torch.linspace(W//2 - dW, W//2 + dW - 1, 2*dW)
+            #             ), -1)
+            #         if i == start:
+            #             print(f"[Config] Center cropping of size {2*dH} x {2*dW} is enabled until iter {args.precrop_iters}")                
+            #     else:
+            #         coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
 
-                coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
-                select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
-                select_coords = coords[select_inds].long()  # (N_rand, 2)
-                rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-                rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-                batch_rays = torch.stack([rays_o, rays_d], 0)
-                target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-
+            #     coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+            #     select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+            #     select_coords = coords[select_inds].long()  # (N_rand, 2)
+            #     rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+            #     rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+            #     batch_rays = torch.stack([rays_o, rays_d], 0)
+            #     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+            from utils.camera import SceneMeta
+            train_targetImg_ten=Target_img_tensor(torch.Tensor(images[i_train]).to(device),poses[i_train, :3,:4])
+            scene_train=SceneMeta(H,W,K)
+            #todo:
+            batch_rays,target_s=sample_traindata(args,train_targetImg_ten,scene_train,i)
         #####  Core optimization loop  #####
         rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                                 verbose=i < 10, retraw=True,
