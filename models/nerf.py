@@ -32,12 +32,14 @@ class NeRF(nn.Module):
                 h=torch.cat([pts_x,h],dim=-1)
         #view
         alpha=self.out_alpha(h)
+        alpha=F.relu(alpha)
         h=self.feature(h)
         h=torch.cat([h,view_x],dim=-1)
         
         h=self.view_linear(h)
         h=F.relu(h)
         rgb=self.out_rgb(h)
+        rgb=torch.sigmoid(rgb)
         return torch.cat([rgb,alpha],dim=-1)
 
 def batch_run_model(pts,views,model,chunk):
@@ -83,6 +85,35 @@ def create_nerf(args):
                                             model=network_fn,
                                             batch_chunk=batch_chunk)
     start=0
+    
+    start = 0
+    basedir = args.basedir
+    expname = args.expname
+
+    ##########################
+    # import os
+    # # Load checkpoints
+    # if args.ft_path is not None and args.ft_path!='None':
+    #     ckpts = [args.ft_path]
+    # else:
+    #     ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
+
+    # print('Found ckpts', ckpts)
+    # if len(ckpts) > 0 and not args.no_reload:
+    #     ckpt_path = ckpts[-1]
+    #     print('Reloading from', ckpt_path)
+    #     ckpt = torch.load(ckpt_path)
+
+    #     start = ckpt['global_step']
+    #     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+
+    #     # Load model
+    #     corse_model.load_state_dict(ckpt['network_fn_state_dict'])
+    #     if fine_model is not None:
+    #         fine_model.load_state_dict(ckpt['network_fine_state_dict'])
+
+    ##########################
+    
     render_kwargs_train = {
         'network_query_fn' : network_query_fn,
         'perturb' : args.perturb,

@@ -4,6 +4,9 @@ import imageio
 import json
 import random
 import time
+import os 
+    # torch.cuda.set_device(1)
+os.environ['CUDA_VISIBLE_DEVICES'] = "1" 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -402,7 +405,10 @@ def render_rays(ray_batch,
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    from utils.render import raw2outputs as _raw2outputs
+    
+    rgb_map, disp_map, acc_map, weights, depth_map = _raw2outputs(raw, z_vals, rays_d)
+    # rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
@@ -418,8 +424,8 @@ def render_rays(ray_batch,
         run_fn = network_fn if network_fine is None else network_fine
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
-
-        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+        rgb_map, disp_map, acc_map, weights, depth_map = _raw2outputs(raw, z_vals, rays_d)
+        # rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
     if retraw:
@@ -929,6 +935,7 @@ def train():
 
 
 if __name__=='__main__':
+    
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
-    # torch.device("cuda:1")
+    
     train()
