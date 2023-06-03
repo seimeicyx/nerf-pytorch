@@ -18,3 +18,28 @@ def raw2outputs(raw:torch.Tensor,z_vals:torch.Tensor,rays_d:torch.Tensor):
     rgb_map=rgb_map+(1-acc_map[...,None])*1.0
     
     return rgb_map, disp_map, acc_map, weights, depth_map
+def sample_pdf(bins:torch.Tensor,weights:torch.Tensor,Nf_samples:int,isTesting):    
+    #weights(N_ray,N_sample-2)
+    weights=weights+1e-5
+    a=torch.sum(weights,dim=-1,keepdim=True)
+    b=torch.sum(weights,dim=-1)
+    pdf=weights/torch.sum(weights,dim=-1,keepdim=True)#(N_ray,Nc_sample-2)
+    cdf=torch.cat([torch.zeros_like(pdf[:,:1]),torch.cumsum(pdf,dim=-1)],dim=-1)#(N_ray,Nc_sample-1)
+    
+    #sample
+    u=torch.rand([cdf.shape[0],Nf_samples])#(N_ray,Nf_sample)
+    
+    #find cdfs&bins
+    u.contiguous()
+    inds=torch.searchsorted(cdf,u,right=True)#(N_ray,Nf_sample)
+    lower_inds=torch.max(torch.zeros_like(inds),inds-1)
+    upper_inds=torch.min(torch.ones_like(inds)*(cdf.shape[-1]-1),inds)
+    bound_inds=torch.stack([lower_inds,upper_inds],dim=-1)
+    
+    _size=[inds.shape[0],inds.shape[1],cdf.shape[-1]]#[N_ray,Nf_sample,Nc_sample]
+    bins_g=torch.gather(bins.unsqueeze(1).expand(_size),-1,bound_inds)#(N_ray,Nf_sample,2)
+    cdfs_g=torch.gather(cdf.unsqueeze(1).expand(_size),-1,bound_inds)#(N_ray,Nf_sample,2)
+    diff_cdf=cdfs_g[...,1]-cdfs_g[...,0]
+    diff_cdf=torch.where(diff_cdf<1e-5,torch.ones_like(diff_cdf),diff_cdf)
+    samples=bins_g[...,0]+((u-cdfs_g[...,0])/diff_cdf)*(bins_g[...,1]-bins_g[...,0])
+    return samples
