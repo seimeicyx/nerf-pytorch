@@ -4,8 +4,9 @@ def raw2outputs(raw:torch.Tensor,z_vals:torch.Tensor,rays_d:torch.Tensor):
     rgb=raw[...,:3]
     delta=raw[...,-1]
     dists=z_vals[...,1:]-z_vals[...,:-1]
-    dists=torch.cat([torch.Tensor([1e-10]).expand(dists[...,:1].shape),dists],dim=-1)
-    dists*=torch.norm(rays_d[...,None,:],dim=-1)
+    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1) 
+    # dists=torch.cat([torch.Tensor([1e-10]).expand(dists[...,:1].shape),dists],dim=-1)
+    dists=dists*torch.norm(rays_d[...,None,:],dim=-1)
     
     alpha=1-torch.exp(-delta*dists)
     weights=alpha*torch.cumprod(torch.cat([torch.ones_like(alpha[...,:1]),1.-alpha+1e-10],dim=-1),dim=-1)[...,:-1]
