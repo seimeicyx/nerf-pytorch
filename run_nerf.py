@@ -59,7 +59,9 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
     """
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(rays_flat[i:i+chunk], **kwargs)
+        from utils.render import render_batch_rays as _render_batch_rays
+        ret = _render_batch_rays(rays_flat[i:i+chunk], **kwargs)
+        # ret = render_rays(rays_flat[i:i+chunk], **kwargs)
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []
@@ -132,7 +134,8 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         rays = torch.cat([rays, viewdirs], -1)
 
     # Render and reshape
-    all_ret = batchify_rays(rays, chunk, **kwargs)
+    from utils.render import batchify_rays as _batchify_rays
+    all_ret = _batchify_rays(rays, chunk, **kwargs)
     for k in all_ret:
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
@@ -572,7 +575,10 @@ def sample_traindata(args,train_targetImg_ten: Target_img_tensor,scene_train: Sc
     if iter<args.precrop_iters:
         dH=int((H*args.precrop_frac)//2)
         dW=int((W*args.precrop_frac)//2)
-        coords=torch.stack(torch.meshgrid(torch.arange(H//2-dH,H//2+dH+1),torch.arange(W//2-dW,W//2+dW+1)),dim=-1)
+        coords=torch.stack(torch.meshgrid(
+                            torch.linspace(H//2 - dH, H//2 + dH - 1, 2*dH), 
+                            torch.linspace(W//2 - dW, W//2 + dW - 1, 2*dW)
+                        ), -1)
     else:
         coords=torch.stack(torch.meshgrid(torch.arange(H),torch.arange(W)),dim=-1)
     coords=torch.reshape(coords,[-1,2])
@@ -783,7 +789,7 @@ def train():
                 i_batch = 0
 
         else:
-            # # Random from one image
+            # Random from one image
             # img_i = np.random.choice(i_train)
             # target = images[img_i]
             # target = torch.Tensor(target).to(device)
