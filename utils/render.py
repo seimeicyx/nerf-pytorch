@@ -107,4 +107,25 @@ def batchify_rays(rays_flat:torch.Tensor, chunk:int=1024*32, **kwargs):
                 all_ret[k]=[]
             all_ret[k].append(ret[k])
     all_ret={k:torch.cat(all_ret[k],0)for k in all_ret}
-    return all_ret    
+    return all_ret
+def render(rays:torch.Tensor,near=1.,far=6.,chunk:int=1024*32,**kwargs):
+    #ray_batch[rays_o, rays_d, near, far, viewdirs]=[1024,3 3 1 1 3]
+    rays_o, rays_d=rays
+    sh=rays_o.shape[:-1]
+    viewdirs=rays_d/torch.norm(rays_d,dim=-1,keepdim=True)
+    near=near*torch.ones(list(rays_o.shape[:-1])+[1])
+    far=far*torch.ones(list(rays_o.shape[:-1])+[1])
+    #flatten
+    rays_o=torch.reshape(rays_o,[-1,rays_o.shape[-1]])
+    rays_d=torch.reshape(rays_d,[-1,rays_d.shape[-1]])
+    viewdirs=torch.reshape(viewdirs,[-1,viewdirs.shape[-1]])
+    near=torch.reshape(near,[-1,near.shape[-1]])
+    far=torch.reshape(far,[-1,far.shape[-1]])
+    rays_flat=torch.cat([rays_o, rays_d, near, far, viewdirs],-1)
+    #render
+    all_ret_flat=batchify_rays(rays_flat,chunk,**kwargs)
+    #reshape
+    all_ret={k:torch.reshape(all_ret_flat[k],list(sh)+[-1]) for k in all_ret_flat.keys()}
+    k_extract = ['rgb_map', 'disp_map', 'acc_map','rgb0']
+    extract_list=[all_ret[k] for k in k_extract]
+    return extract_list+[all_ret]  
