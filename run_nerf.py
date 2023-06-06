@@ -161,9 +161,16 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
+        
         print(i, time.time() - t)
         t = time.time()
-        rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        from utils.camera import SceneMeta,PinholeCamera
+        cam=PinholeCamera(scene_meta=SceneMeta(H,W,K),camera_pose=c2w)
+        rays_o, rays_d = cam.cast_ray()
+        rays=torch.stack([rays_o,rays_d],0)
+        from utils.render import render as _render
+        rgb, disp,_,_, _=_render(rays,chunk=chunk,**render_kwargs)
+        # rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
         if i==0:
@@ -827,20 +834,25 @@ def train():
             #todo:
             batch_rays,target_s=sample_traindata(args,train_targetImg_ten,scene_train,i)
         #####  Core optimization loop  #####
-        rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
-                                                verbose=i < 10, retraw=True,
-                                                **render_kwargs_train)
+        from utils.render import render as _render
+        rgb, disp, acc,rgb0, rets_dict=_render(batch_rays,chunk=args.chunk,**render_kwargs_train)
+        # rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
+        #                                         verbose=i < 10, retraw=True,
+        #                                         **render_kwargs_train)
 
         optimizer.zero_grad()
         img_loss = img2mse(rgb, target_s)
-        trans = extras['raw'][...,-1]
+        # trans = extras['raw'][...,-1]
         loss = img_loss
         psnr = mse2psnr(img_loss)
-
-        if 'rgb0' in extras:
-            img_loss0 = img2mse(extras['rgb0'], target_s)
-            loss = loss + img_loss0
-            psnr0 = mse2psnr(img_loss0)
+        
+        img_loss0 = img2mse(rgb0, target_s)
+        loss = loss + img_loss0
+        psnr0 = mse2psnr(img_loss0)
+        # if 'rgb0' in extras:
+        #     img_loss0 = img2mse(extras['rgb0'], target_s)
+        #     loss = loss + img_loss0
+        #     psnr0 = mse2psnr(img_loss0)
 
         loss.backward()
         optimizer.step()
